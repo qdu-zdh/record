@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我们的足迹 - 异地见面记录 (离线版)</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        /* --- 基础重置 --- */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #111827; /* Gray-900 */
+            color: white;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* --- 布局 --- */
+        #app {
+            display: flex;
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            #app { flex-direction: column-reverse; }
+        }
+
+        /* --- 地图容器 --- */
+        #map-container {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 0;
+            background: #0f172a; 
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+
+        /* --- 侧边栏 --- */
+        #sidebar {
+            z-index: 10;
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none; 
+            padding: 24px;
+        }
+
+        @media (max-width: 768px) {
+            #sidebar { width: 100%; height: 50%; padding: 16px; }
+        }
+
+        /* --- UI 组件 --- */
+        .glass-panel {
+            background: rgba(17, 24, 39, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            pointer-events: auto; 
+        }
+
+        .header-card {
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 16px;
+            transition: transform 0.3s;
+        }
+        .header-card:hover { transform: scale(1.02); }
+
+        .trip-list {
+            flex: 1;
+            overflow-y: auto;
+            scrollbar-width: none; 
+            -ms-overflow-style: none;
+            padding-bottom: 80px; 
+        }
+        .trip-list::-webkit-scrollbar { display: none; }
+
+        .trip-card {
+            cursor: pointer;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(55, 65, 81, 0.5);
+            transition: all 0.3s ease;
+            background: rgba(17, 24, 39, 0.6);
+        }
+
+        .trip-card:hover {
+            background: rgba(31, 41, 55, 0.8);
+            border-color: #4b5563;
+        }
+
+        /* 选中状态 */
+        .trip-card.active {
+            background: linear-gradient(135deg, rgba(131, 24, 67, 0.8), rgba(88, 28, 135, 0.8));
+            border-color: rgba(236, 72, 153, 0.5);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            transform: scale(1.02);
+        }
+
+        /* 详情区域动画 */
+        .details {
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transition: all 0.5s ease;
+        }
+        .trip-card.active .details {
+            max-height: 400px;
+            opacity: 1;
+            margin-top: 12px;
+        }
+
+        /* 字体样式 */
+        h1 { font-size: 24px; font-weight: bold; margin-bottom: 8px; }
+        h3 { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+        p { font-size: 12px; color: #9ca3af; line-height: 1.5; }
+        .tag { 
+            font-family: monospace; font-size: 12px; padding: 2px 8px; border-radius: 4px; 
+            background: #374151; color: #9ca3af; display: inline-flex; align-items: center; gap: 4px;
+        }
+        .active .tag { background: rgba(236, 72, 153, 0.2); color: #fbcfe8; }
+        
+        .spot-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .spot-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+        }
+        .spot-name { color: #fbcfe8; font-size: 12px; font-weight: 500; }
+        .spot-note { color: #6b7280; font-size: 10px; transform: scale(0.9); transform-origin: left; }
+
+        /* --- 地图样式重写 --- */
+        .pulse-icon {
+            background-color: rgba(236, 72, 153, 0.6);
+            border-radius: 50%;
+            border: 2px solid #fff;
+            animation: pulse 2s infinite;
+            width: 100%; height: 100%;
+            box-sizing: border-box;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.7); }
+            70% { transform: scale(1.1); box-shadow: 0 0 0 10px rgba(236, 72, 153, 0); }
+            100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(236, 72, 153, 0); }
+        }
+
+        .flowing-line {
+            stroke-dasharray: 10, 10;
+            animation: flow 1.5s linear infinite;
+        }
+        @keyframes flow {
+            from { stroke-dashoffset: 20; }
+            to { stroke-dashoffset: 0; }
+        }
+
+        .leaflet-interactive { transition: stroke-dashoffset 0.5s ease; }
+
+        .vehicle-icon-container {
+            transition: none; /* 由 JS 完全接管动画旋转以保持平滑 */
+            filter: drop-shadow(0 0 4px rgba(0,0,0,0.5));
+            width: 24px; height: 24px;
+        }
+    </style>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+
+    <div id="app">
+        <!-- 地图容器 -->
+        <div id="map-container"></div>
+
+        <!-- 侧边栏 -->
+        <div id="sidebar">
+            <div class="header-card glass-panel">
+                <div style="display: flex; align-items: center; color: #f472b6; margin-bottom: 4px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="margin-right: 8px;">
+                        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
+                    </svg>
+                    <span style="font-size: 12px; letter-spacing: 2px; text-transform: uppercase;">Love Journey</span>
+                </div>
+                <h1>见面是最好的解药</h1>
+                <p>从北京到成都，跨越山海的相聚。<br>每一次出发，都是为了更好的重逢。</p>
+            </div>
+
+            <!-- 行程列表 -->
+            <div id="trip-list" class="trip-list"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 数据定义 ---
+        const LOCATIONS = {
+            Beijing: { coords: [39.9042, 116.4074], name: "北京" },
+            Chengdu: { coords: [30.5728, 104.0668], name: "成都" },
+            Zaozhuang: { coords: [34.8669, 117.5579], name: "枣庄" },
+            Jinan: { coords: [36.6512, 117.1201], name: "济南" },
+            Zibo: { coords: [36.8135, 118.0550], name: "淄博" },
+            Qingdao: { coords: [36.0671, 120.3826], name: "青岛" },
+        };
+
+        // 核心高铁线路骨架 (模拟真实铁路大动脉走向)
+        const RAIL_GEOMETRY = {
+            "Beijing-Chengdu": [[39.9042, 116.4074], [38.0428, 114.5149], [34.7466, 113.6253], [34.3416, 108.9398], [33.0776, 107.0286], [31.4675, 104.7570], [30.5728, 104.0668]],
+            "Chengdu-Jinan": [[30.5728, 104.0668], [31.4675, 104.7570], [34.3416, 108.9398], [34.7466, 113.6253], [34.8016, 114.3312], [36.6512, 117.1201]],
+            "Zaozhuang-Jinan": [[34.8669, 117.5579], [35.3995, 116.9698], [35.5926, 116.9856], [36.1928, 117.1264], [36.6512, 117.1201]],
+            "Jinan-Zibo": [[36.6512, 117.1201], [36.7025, 117.6534], [36.8135, 118.0550]],
+            "Zibo-Qingdao": [[36.8135, 118.0550], [36.8159, 118.5303], [36.7068, 119.1617], [36.3813, 120.0055], [36.0671, 120.3826]]
+        };
+
+        const TRIPS = [
+            {
+                id: 1,
+                date: "2025.05.28 - 05.31",
+                title: "初夏 · 成都之约",
+                city: "成都",
+                transport: "train",
+                origins: ["Beijing", "Chengdu"], 
+                destination: "Chengdu", 
+                spots: [{ name: "西华大学", note: "校园" }, { name: "线下见面", note: "第一次见面就是旅行" }, { name: "眉山", note: "坡坡" }, { name: "成都市区", note: "CityWalk" }, { name: "武侯祠", note: "诸葛亮 藏餐" }, { name: "宽窄巷子", note: "雨中" }],
+                desc: "北京出发，成都汇合，相聚是一种奔赴。",
+                zoom: 5
+            },
+            {
+                id: 2,
+                date: "2025.08.07 - 08.18",
+                title: "盛夏 · 山东巡礼",
+                city: "济南 / 淄博 / 青岛",
+                transport: "train",
+                origins: ["Zaozhuang", "Chengdu"],
+                destination: "Jinan",
+                route: ["Jinan", "Zibo", "Qingdao"],
+                spots: [{ name: "德霖婚礼", note: "园博园" }, { name: "淄博烧烤", note: "烟火" }, { name: "中国海洋大学", note: "最美校园" }, { name: "青岛民宿", note: "共同生活" }, { name: "海肠捞饭", note: "爽" }, { name: "青岛的海", note: "浪漫" }],
+                desc: "跨越半个中国的相聚。从婚礼的喜悦到海边的浪漫。",
+                zoom: 6
+            },
+            {
+                id: 3,
+                date: "2025.09.29 - 10.06",
+                title: "金秋 · 重回蓉城",
+                city: "成都",
+                transport: "train",
+                origins: ["Beijing", "Chengdu"],
+                destination: "Chengdu",
+                spots: [{ name: "三星堆", note: "古蜀文明" }, { name: "金沙遗址", note: "太阳神鸟" }, { name: "Matrix小酒馆", note: "微醺" }, { name: "实验室", note: "学习" }, { name: "观察鱼群", note: "记录" }, { name: "成都夜景", note: "漫步" }],
+                desc: "十一长假的深度探索，在历史与现代交织的成都。",
+                zoom: 5
+            },
+            {
+                id: 4,
+                date: "2025.12.31 - 2026.01.04",
+                title: "跨年 · 京城冬日",
+                city: "北京",
+                transport: "plane",
+                origins: ["Beijing", "Chengdu"],
+                destination: "Beijing",
+                spots: [{ name: "雍和宫", note: "祈福" }, { name: "鼓楼", note: "风情" }, { name: "故宫", note: "紫禁之巅" }, { name: "北工大", note: "漫步" }, { name: "CBD", note: "繁华" }, { name: "疯狂动物城2", note: "影院" }],
+                desc: "在漫天冬日里跨年。古老的胡同到摩登的CBD。",
+                zoom: 5
+            },
+            {
+                id: 5,
+                date: "2026.4.27 - 2026.4.30",
+                title: "五一 · 错峰出行",
+                city: "成都",
+                transport: "train",
+                origins: ["Beijing", "Chengdu"],
+                destination: "Chengdu",
+                spots: [{ name: "郫都龙虾", note: "好吃" }, { name: "艺术图书馆", note: "雅致" }, { name: "串串", note: "经典" }, { name: "天府广场", note: "偶遇" }, { name: "校园", note: "漫步" }, { name: "宽窄巷子", note: "露台" }],
+                desc: "图书馆真的漂亮，饭也好吃，景好饭好人更好。",
+                zoom: 5
+            },
+            {
+                id: 6,
+                date: "2026.05.20",
+                title: "面试 · 京城春风",
+                city: "北京",
+                transport: "plane",
+                origins: ["Beijing", "Chengdu"],
+                destination: "Beijing",
+                spots: [{ name: "北航", note: "新主楼" }, { name: "簋街", note: "小龙虾" }],
+                desc: "海陆空，为了未来而奔赴。",
+                zoom: 5
+            }
+        ];
+
+        // SVG Icons
+        const ICONS = {
+            train: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><path d="M4 11h16"/><path d="M12 4v8"/><path d="m8 19-2 3"/><path d="m18 22-2-3"/><path d="M8 15h0"/><path d="M16 15h0"/></svg>`,
+            plane: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20"/><path d="M13 2 9 12l4 10 3-3-2-7 6-3-5-4Z"/></svg>`,
+            mapPin: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`,
+            mapTrain: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><path d="M4 11h16"/><path d="M12 4v8"/><path d="m8 19-2 3"/><path d="m18 22-2-3"/><path d="M8 15h0"/><path d="M16 15h0"/></svg>`,
+            mapPlane: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#fbbf24" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20"/><path d="M13 2 9 12l4 10 3-3-2-7 6-3-5-4Z"/></svg>`
+        };
+
+        // --- 2. 状态管理 ---
+        let map = null;
+        let activeTripId = 4;
+        let layers = []; 
+        let movingMarkers = []; 
+        let animationFrameId = null;
+
+        // --- 3. 初始化 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            renderList();
+            setTimeout(() => {
+                updateMap(TRIPS.find(t => t.id === activeTripId));
+            }, 100);
+        });
+
+        function initMap() {
+            map = L.map('map-container', {
+                zoomControl: false,
+                attributionControl: false
+            }).setView([35.0, 105.0], 4);
+            map.invalidateSize();
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                subdomains: 'abcd', maxZoom: 19
+            }).addTo(map);
+            window.addEventListener('resize', () => map.invalidateSize());
+        }
+
+        // --- 4. 列表渲染 ---
+        function renderList() {
+            const listEl = document.getElementById('trip-list');
+            listEl.innerHTML = ''; 
+
+            TRIPS.forEach(trip => {
+                const isActive = trip.id === activeTripId;
+                const card = document.createElement('div');
+                card.className = `trip-card glass-panel ${isActive ? 'active' : ''}`;
+                card.onclick = () => selectTrip(trip.id);
+
+                const header = document.createElement('div');
+                header.style.cssText = "display:flex; justify-content:space-between; margin-bottom:8px;";
+                header.innerHTML = `
+                    <div class="tag">
+                        ${trip.transport === 'plane' ? ICONS.plane : ICONS.train}
+                        ${trip.date.split('-')[0].trim()}
+                    </div>
+                    ${isActive ? '<span style="width:8px; height:8px; background:#ec4899; border-radius:50%; box-shadow:0 0 8px #ec4899;"></span>' : ''}
+                `;
+                
+                const body = document.createElement('div');
+                body.innerHTML = `
+                    <h3>${trip.title}</h3>
+                    <div style="display:flex; align-items:center; font-size:12px; color:#9ca3af; margin-bottom:4px;">
+                        ${ICONS.mapPin} <span style="margin-left:4px;">${trip.city}</span>
+                    </div>
+                `;
+
+                const details = document.createElement('div');
+                details.className = 'details';
+                const spotsHtml = trip.spots.map(s => `
+                    <div class="spot-item">
+                        <span class="spot-name">${s.name}</span>
+                        <span class="spot-note">${s.note}</span>
+                    </div>
+                `).join('');
+
+                details.innerHTML = `
+                    <p style="border-left: 2px solid #ec4899; padding-left: 8px; margin-bottom: 8px; font-style: italic; color: #d1d5db;">
+                        "${trip.desc}"
+                    </p>
+                    <div class="spot-grid">${spotsHtml}</div>
+                `;
+
+                card.appendChild(header);
+                card.appendChild(body);
+                card.appendChild(details);
+                listEl.appendChild(card);
+            });
+        }
+
+        function selectTrip(id) {
+            if (activeTripId === id) return;
+            activeTripId = id;
+            renderList(); 
+            updateMap(TRIPS.find(t => t.id === id));
+        }
+
+        // --- 数学几何 & 路线平滑生成算法 ---
+        function smoothPath(points, iterations = 3) {
+            if (points.length < 2) return points;
+            let smoothed = [...points];
+            for (let iter = 0; iter < iterations; iter++) {
+                let temp = [smoothed[0]];
+                for (let i = 0; i < smoothed.length - 1; i++) {
+                    const p0 = smoothed[i];
+                    const p1 = smoothed[i + 1];
+                    temp.push([0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]]);
+                    temp.push([0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]]);
+                }
+                temp.push(smoothed[smoothed.length - 1]);
+                smoothed = temp;
+            }
+            return smoothed;
+        }
+
+        function getBezierCurve(start, end, bend = 0.15, numPoints = 50) {
+            const points = [];
+            const midLat = (start[0] + end[0]) / 2;
+            const midLng = (start[1] + end[1]) / 2;
+            const dLat = end[0] - start[0];
+            const dLng = end[1] - start[1];
+            const ctrlLat = midLat - dLng * bend;
+            const ctrlLng = midLng + dLat * bend;
+            for (let i = 0; i <= numPoints; i++) {
+                const t = i / numPoints;
+                const lat = (1-t)*(1-t)*start[0] + 2*(1-t)*t*ctrlLat + t*t*end[0];
+                const lng = (1-t)*(1-t)*start[1] + 2*(1-t)*t*ctrlLng + t*t*end[1];
+                points.push([lat, lng]);
+            }
+            return points;
+        }
+
+        function getPointAtProgress(path, progress) {
+            if (progress <= 0) return { coord: path[0], bearing: getBearing(path[0], path[1]) };
+            if (progress >= 1) return { coord: path[path.length-1], bearing: getBearing(path[path.length-2], path[path.length-1]) };
+            let totalLen = 0;
+            const segmentLengths = [];
+            for (let i = 0; i < path.length - 1; i++) {
+                const l = Math.sqrt(Math.pow(path[i+1][0]-path[i][0], 2) + Math.pow(path[i+1][1]-path[i][1], 2));
+                segmentLengths.push(l);
+                totalLen += l;
+            }
+            const targetLen = totalLen * progress;
+            let currentLen = 0;
+            for (let i = 0; i < path.length - 1; i++) {
+                if (currentLen + segmentLengths[i] >= targetLen) {
+                    const segmentProgress = (targetLen - currentLen) / segmentLengths[i];
+                    const start = path[i];
+                    const end = path[i+1];
+                    const lat = start[0] + (end[0] - start[0]) * segmentProgress;
+                    const lng = start[1] + (end[1] - start[1]) * segmentProgress;
+                    return { coord: [lat, lng], bearing: getBearing(start, end) };
+                }
+                currentLen += segmentLengths[i];
+            }
+            return { coord: path[path.length-1], bearing: 0 };
+        }
+
+        function getBearing(start, end) {
+            const startLat = start[0], startLng = start[1], destLat = end[0], destLng = end[1];
+            const toRad = deg => deg * Math.PI / 180;
+            const toDeg = rad => rad * 180 / Math.PI;
+            const y = Math.sin(toRad(destLng) - toRad(startLng)) * Math.cos(toRad(destLat));
+            const x = Math.cos(toRad(startLat)) * Math.sin(toRad(destLat)) -
+                    Math.sin(toRad(startLat)) * Math.cos(toRad(destLat)) * Math.cos(toRad(destLng) - toRad(startLng));
+            const brng = Math.atan2(y, x);
+            return (toDeg(brng) + 360) % 360;
+        }
+
+        // --- 5. 地图渲染 ---
+        function updateMap(trip) {
+            if (!map) return;
+            map.invalidateSize();
+            if (map.getSize().x === 0) return;
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            layers.forEach(l => map.removeLayer(l));
+            movingMarkers.forEach(m => map.removeLayer(m.marker));
+            layers = [];
+            movingMarkers = [];
+
+            const bounds = [];
+            const destCoords = LOCATIONS[trip.destination].coords;
+            const destIcon = L.divIcon({ className: 'custom-div-icon', html: `<div class="pulse-icon"></div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
+            const destMarker = L.marker(destCoords, { icon: destIcon }).addTo(map);
+            layers.push(destMarker);
+            bounds.push(destCoords);
+
+            trip.origins.forEach(originKey => {
+                const originCoords = LOCATIONS[originKey].coords;
+                bounds.push(originCoords);
+                if (originKey !== trip.destination) {
+                    let pathCoords = [];
+                    const routeKey = `${originKey}-${trip.destination}`;
+                    const reverseRouteKey = `${trip.destination}-${originKey}`;
+                    if (trip.transport === 'train') {
+                        pathCoords = (RAIL_GEOMETRY[routeKey]) ? smoothPath(RAIL_GEOMETRY[routeKey], 3) : 
+                                     (RAIL_GEOMETRY[reverseRouteKey]) ? smoothPath([...RAIL_GEOMETRY[reverseRouteKey]].reverse(), 3) : getBezierCurve(originCoords, destCoords, 0.05);
+                    } else {
+                        pathCoords = getBezierCurve(originCoords, destCoords, 0.18);
+                    }
+                    const line = L.polyline(pathCoords, { color: '#fbbf24', weight: 3, opacity: 0.5, dashArray: '10, 10', className: 'flowing-line' }).addTo(map);
+                    layers.push(line);
+                    const originCircle = L.circleMarker(originCoords, { radius: 6, fillColor: '#60a5fa', color: '#fff', weight: 2, opacity: 1, fillOpacity: 0.8 }).addTo(map);
+                    layers.push(originCircle);
+                    const iconHtml = `<div class="vehicle-icon-container">${trip.transport === 'plane' ? ICONS.mapPlane : ICONS.mapTrain}</div>`;
+                    const vMarker = L.marker(originCoords, { icon: L.divIcon({ className: '', html: iconHtml, iconSize: [24, 24], iconAnchor: [12, 12] }), zIndexOffset: 1000 }).addTo(map);
+                    movingMarkers.push({ marker: vMarker, path: pathCoords, progress: 0, speed: 0.0025 + (Math.random() * 0.001) });
+                }
+            });
+
+            if (trip.route) {
+                let fullRoutePath = [];
+                for (let i = 0; i < trip.route.length - 1; i++) {
+                    const startKey = trip.route[i], endKey = trip.route[i+1];
+                    let segment = RAIL_GEOMETRY[`${startKey}-${endKey}`] || RAIL_GEOMETRY[`${endKey}-${startKey}`]?.reverse() || [LOCATIONS[startKey].coords, LOCATIONS[endKey].coords];
+                    if (fullRoutePath.length > 0) segment = segment.slice(1);
+                    fullRoutePath.push(...segment);
+                }
+                const routeLine = L.polyline(smoothPath(fullRoutePath, 3), { color: '#ec4899', weight: 4, opacity: 0.9, lineCap: 'round' }).addTo(map);
+                layers.push(routeLine);
+                trip.route.forEach(k => { if (k !== trip.destination) { bounds.push(LOCATIONS[k].coords); layers.push(L.circleMarker(LOCATIONS[k].coords, { radius: 5, fillColor: '#ec4899', color: '#fff', weight: 1, fillOpacity: 1 }).addTo(map)); } });
+            }
+            if (movingMarkers.length > 0) animateVehicles();
+            if (bounds.length > 0) {
+                const latLngBounds = L.latLngBounds(bounds);
+                if (latLngBounds.isValid()) try { map.flyToBounds(latLngBounds, { padding: [50, 50], maxZoom: trip.zoom + 1, duration: 1.5 }); } catch (e) {}
+            }
+        }
+
+        function animateVehicles() {
+            movingMarkers.forEach(item => {
+                item.progress += item.speed;
+                if (item.progress > 1) item.progress = 0; 
+                const posData = getPointAtProgress(item.path, item.progress);
+                item.marker.setLatLng(posData.coord);
+                const container = item.marker.getElement()?.querySelector('.vehicle-icon-container');
+                if (container) container.style.transform = `rotate(${posData.bearing - 90}deg)`;
+            });
+            animationFrameId = requestAnimationFrame(animateVehicles);
+        }
+    </script>
+</body>
+</html>
